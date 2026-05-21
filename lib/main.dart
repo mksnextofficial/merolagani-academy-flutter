@@ -1072,16 +1072,22 @@ class LessonVideoPlayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (source.kind == VideoPlayerSourceKind.embedded) {
-      return EmbeddedBunnyPlayer(source: source);
+      return EmbeddedBunnyPlayer(source: source, onProgress: onProgress);
     }
     return NativeVideoPlayer(source: source, onProgress: onProgress);
   }
 }
 
 class EmbeddedBunnyPlayer extends StatefulWidget {
-  const EmbeddedBunnyPlayer({required this.source, super.key});
+  const EmbeddedBunnyPlayer({
+    required this.source,
+    required this.onProgress,
+    super.key,
+  });
 
   final VideoPlayerSource source;
+  final void Function(Duration position, Duration duration, bool completed)
+  onProgress;
 
   @override
   State<EmbeddedBunnyPlayer> createState() => _EmbeddedBunnyPlayerState();
@@ -1114,6 +1120,10 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
     return WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.black)
+      ..addJavaScriptChannel(
+        'LessonVideoProgress',
+        onMessageReceived: _handleProgressMessage,
+      )
       ..setUserAgent(
         'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
         '(KHTML, like Gecko) Chrome/125 Mobile Safari/537.36',
@@ -1129,6 +1139,7 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
             }
           },
           onPageFinished: (_) {
+            _installProgressBridge();
             if (mounted) setState(() => _loading = false);
           },
           onWebResourceError: (error) {
@@ -1142,6 +1153,56 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
         ),
       )
       ..loadRequest(uri);
+  }
+
+  void _installProgressBridge() {
+    unawaited(
+      _controller
+          .runJavaScript('''
+        (function () {
+          if (window.__merolaganiProgressBridgeInstalled) return;
+          window.__merolaganiProgressBridgeInstalled = true;
+          function reportProgress() {
+            var video = document.querySelector('video');
+            if (!video || !isFinite(video.duration) || video.duration <= 0) {
+              return;
+            }
+            LessonVideoProgress.postMessage(JSON.stringify({
+              position: video.currentTime || 0,
+              duration: video.duration || 0,
+              completed: !!video.ended
+            }));
+          }
+          setInterval(reportProgress, 1000);
+          document.addEventListener('play', reportProgress, true);
+          document.addEventListener('pause', reportProgress, true);
+          document.addEventListener('ended', reportProgress, true);
+        })();
+      ''')
+          .catchError((_) {}),
+    );
+  }
+
+  void _handleProgressMessage(JavaScriptMessage message) {
+    try {
+      final payload = jsonDecode(message.message);
+      if (payload is! Map<String, dynamic>) return;
+      final positionSeconds = (payload['position'] as num?)?.toDouble();
+      final durationSeconds = (payload['duration'] as num?)?.toDouble();
+      final completed = payload['completed'] == true;
+      if (positionSeconds == null ||
+          durationSeconds == null ||
+          durationSeconds <= 0) {
+        return;
+      }
+      widget.onProgress(
+        Duration(milliseconds: (positionSeconds * 1000).round()),
+        Duration(milliseconds: (durationSeconds * 1000).round()),
+        completed,
+      );
+    } catch (_) {
+      // Ignore malformed WebView bridge messages; playback should continue.
+    }
   }
 
   @override
@@ -2660,6 +2721,20 @@ class AcademyApi {
     }
 
     final body = _decodeObject(response);
+    final embedUrl = _findStringByKeys(body, const [
+      'embedUrl',
+      'embed_url',
+      'playerUrl',
+      'player_url',
+      'url',
+    ]);
+    if (embedUrl != null && embedUrl.isNotEmpty) {
+      return VideoPlayerSource.fromUrl(
+        embedUrl,
+        kind: VideoPlayerSourceKind.embedded,
+      );
+    }
+
     final nativeUrl = _findStringByKeys(body, const [
       'hlsUrl',
       'hls_url',
@@ -2679,21 +2754,7 @@ class AcademyApi {
       );
     }
 
-    final embedUrl = _findStringByKeys(body, const [
-      'embedUrl',
-      'embed_url',
-      'playerUrl',
-      'player_url',
-      'url',
-    ]);
-    if (embedUrl == null || embedUrl.isEmpty) {
-      throw Exception('Video player URL was not returned by the server.');
-    }
-
-    return VideoPlayerSource.fromUrl(
-      embedUrl,
-      kind: VideoPlayerSourceKind.embedded,
-    );
+    throw Exception('Video player URL was not returned by the server.');
   }
 
   Future<String?> createWatchSession({

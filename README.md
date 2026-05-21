@@ -6,7 +6,8 @@ Native Flutter Android app for Merolagani Academy.
 
 - Android app shell, course browsing, learning dashboard, account flows, and embedded lesson playback are implemented in Flutter.
 - Protected Bunny lesson playback now uses the Lovable mobile endpoint at `/api/public/bunny/sign-playback`.
-- Direct HLS/MP4 lesson URLs use native Flutter `video_player`; Bunny player/embed URLs use an embedded Bunny WebView player inside the native lesson screen.
+- Signed Bunny lessons prefer the official Bunny embed player inside the native lesson screen; direct HLS/MP4 lesson URLs still use Flutter `video_player`.
+- The embedded Bunny player reports watch progress back to Flutter through a WebView bridge.
 - Expired Supabase access tokens are refreshed and retried before protected video playback fails.
 - Course lessons now open in a Udemy-style learning screen with the player on top and quizzes/curriculum below.
 - Lesson quizzes/questions and signed-in quiz attempt submission are wired.
@@ -14,7 +15,7 @@ Native Flutter Android app for Merolagani Academy.
 - Release APK and Android App Bundle have been built successfully.
 - Local static checks pass with `flutter analyze` and `flutter test`.
 - Android Studio can open the project from this folder.
-- Protected video playback still needs a real enrolled learner login for final end-to-end validation.
+- Protected video playback has been tested with a signed-in learner on the Android emulator.
 
 ## Build Artifacts
 
