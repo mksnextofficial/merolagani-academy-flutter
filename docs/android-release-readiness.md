@@ -4,16 +4,17 @@ Prepared on 2026-05-21.
 
 ## Current Status
 
-The Android app is now a native Flutter app, not a WebView wrapper. The latest build includes native navigation, course browsing, course detail, a Udemy-style learning screen, native Bunny/HLS playback wiring, lesson quizzes, resources, watch-session heartbeats, lesson completion calls, and signed-in quiz attempt submission.
+The Android app is now a native Flutter app, not a WebView wrapper. The latest build includes native navigation, course browsing, course detail, a Udemy-style learning screen, protected Bunny playback handling, lesson quizzes, resources, watch-session heartbeats, lesson completion calls, and signed-in quiz attempt submission.
 
 Release APK and AAB builds complete successfully. The release APK was installed and smoke-tested on the `Merolagani_API36` Android emulator.
 
 ## Major Changes
 
 - Replaced the old separate/blank video page with `CourseLearningScreen`: video stays at the top, and lesson summary, resources, quiz, and curriculum stay below it.
-- Replaced WebView playback with Flutter `video_player` native playback.
-- Bunny playback now calls `POST https://merolaganiacademy.com/api/public/bunny/sign-playback` and prefers `hlsUrl` for native playback.
-- Added protected-video states: signed-out learners see a clear sign-in prompt; enrolled learners should receive the signed Bunny HLS URL.
+- Direct HLS/MP4 playback uses Flutter `video_player`; Bunny player/embed URLs use `webview_flutter` inside the native lesson screen.
+- Bunny playback now calls `POST https://merolaganiacademy.com/api/public/bunny/sign-playback`, prefers direct HLS/MP4 URLs when available, and falls back to Bunny embed/player URLs.
+- Added protected-video states: signed-out learners see a clear sign-in prompt; expired sessions are refreshed/retried before showing an auth failure.
+- Fixed the signed-out course detail action so `Sign in to start` opens the Account tab instead of dropping users into a failed lesson screen.
 - Added video progress tracking through `video_watch_sessions` create/update calls.
 - Added `POST /api/public/lessons/mark-complete` after completed playback progress.
 - Added quizzes/questions from Supabase and lesson-level quiz counts in the curriculum.
@@ -35,18 +36,16 @@ flutter build appbundle --release
 
 Release artifacts:
 
-- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/MerolaganiAcademy-release-ready-android.apk`
-- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/MerolaganiAcademy-release-ready-android.aab`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/MerolaganiAcademy-playback-fix-release.apk`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/MerolaganiAcademy-playback-fix-release.aab`
 
 Emulator QA:
 
 - Installed release APK on Android API 36 emulator.
 - Opened Home and Courses.
 - Opened `Credit Course` course detail.
-- Entered the learning screen.
-- Verified the video area is embedded at top, not a separate blank page.
-- Verified lesson summary, quiz, quiz questions/options, and curriculum render below the player.
-- Verified curriculum lesson switching updates the selected lesson.
+- Verified signed-out `Sign in to start` routes to Account instead of opening the lesson screen.
+- Verified the app launches after adding `webview_flutter`.
 - Checked logcat after navigation for Flutter render overflow, Android fatal exception, and ANR patterns.
 
 Latest screenshots:
@@ -56,20 +55,11 @@ Latest screenshots:
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/19-release-course-detail.png`
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/20-release-learning.png`
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/21-release-quiz-actions.png`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/22-playback-fix-signed-out-account.png`
 
 ## Important Remaining Blockers
 
-Protected Bunny playback still needs one real enrolled learner test. All published Credit Course lessons currently require a signed-in/enrolled user, and the emulator is not signed in with an enrolled learner account. Without that, the app can only verify the signed-out state and the native player wiring, not successful HLS playback.
-
-GitHub push is still blocked by environment setup:
-
-```text
-fatal: not a git repository
-gh is not authenticated
-no GitHub app repository was available to Codex
-```
-
-To complete the final push, provide the target repository URL or initialize this folder as the intended repo, then authenticate GitHub/`gh`.
+Protected Bunny playback still needs one real enrolled learner test. All published Credit Course lessons currently require a signed-in/enrolled user, and the emulator is not signed in with an enrolled learner account. Without that, the app can verify the signed-out flow, release build, WebView/native player compilation, and app stability, but not successful protected playback with the real user entitlement.
 
 ## Build Notes
 
@@ -81,4 +71,4 @@ To complete the final push, provide the target repository URL or initialize this
 - Android backup: disabled
 - Release builds use the debug signing config if `android/key.properties` is absent. Add a production keystore before Play Store upload.
 
-Flutter currently warns that `shared_preferences_android` and `video_player_android` apply the Kotlin Gradle Plugin. This is a future Flutter compatibility warning, not a current build failure.
+Flutter currently warns that `shared_preferences_android`, `video_player_android`, and `webview_flutter_android` apply the Kotlin Gradle Plugin. This is a future Flutter compatibility warning, not a current build failure.

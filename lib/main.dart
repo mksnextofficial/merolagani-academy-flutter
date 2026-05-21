@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 const _supabaseUrl = 'https://cgnpscogzqvrvaopwhhm.supabase.co';
 const _anonKey =
@@ -586,29 +587,30 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   ],
                 ),
                 const SizedBox(height: 20),
-                FilledButton.icon(
-                  onPressed: detail.sections.isEmpty
-                      ? null
-                      : () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => CourseLearningScreen(
-                              api: widget.api,
-                              auth: widget.auth,
-                              detail: detail,
-                              onOpenAccount: widget.onOpenAccount,
-                            ),
-                          ),
-                        ),
-                  icon: Icon(
-                    widget.auth.isSignedIn
-                        ? Icons.play_arrow_rounded
-                        : Icons.lock_open_rounded,
-                  ),
-                  label: Text(
-                    widget.auth.isSignedIn
-                        ? 'Start learning'
-                        : 'Sign in to start',
-                  ),
+                AnimatedBuilder(
+                  animation: widget.auth,
+                  builder: (context, _) {
+                    final isSignedIn = widget.auth.isSignedIn;
+                    return FilledButton.icon(
+                      onPressed: detail.sections.isEmpty
+                          ? null
+                          : () {
+                              if (!isSignedIn) {
+                                widget.onOpenAccount();
+                                return;
+                              }
+                              _openLearningScreen(context, detail);
+                            },
+                      icon: Icon(
+                        isSignedIn
+                            ? Icons.play_arrow_rounded
+                            : Icons.lock_open_rounded,
+                      ),
+                      label: Text(
+                        isSignedIn ? 'Start learning' : 'Sign in to start',
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(height: 18),
                 if (snapshot.connectionState == ConnectionState.waiting)
@@ -670,13 +672,25 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   }
 
   void _showLesson(BuildContext context, CourseDetail detail, Lesson lesson) {
+    if (!widget.auth.isSignedIn && !lesson.isPreview) {
+      widget.onOpenAccount();
+      return;
+    }
+    _openLearningScreen(context, detail, initialLessonId: lesson.id);
+  }
+
+  void _openLearningScreen(
+    BuildContext context,
+    CourseDetail detail, {
+    String? initialLessonId,
+  }) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => CourseLearningScreen(
           api: widget.api,
           auth: widget.auth,
           detail: detail,
-          initialLessonId: lesson.id,
+          initialLessonId: initialLessonId,
           onOpenAccount: widget.onOpenAccount,
         ),
       ),
@@ -839,6 +853,18 @@ class _LearningVideoPanelState extends State<_LearningVideoPanel> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.auth.isRestoring) {
+      return const ColoredBox(
+        color: Colors.black,
+        child: _PlayerMessage(
+          icon: Icons.lock_clock_rounded,
+          title: 'Checking session',
+          message: 'Getting your learning access ready...',
+          showProgress: true,
+        ),
+      );
+    }
+
     if (!widget.auth.isSignedIn) {
       return ColoredBox(
         color: Colors.black,
@@ -922,7 +948,7 @@ class _LearningVideoPanelState extends State<_LearningVideoPanel> {
           );
         }
 
-        return NativeVideoPlayer(
+        return LessonVideoPlayer(
           source: source,
           onProgress: _handleVideoProgress,
         );
@@ -941,10 +967,26 @@ class _LearningVideoPanelState extends State<_LearningVideoPanel> {
       return VideoPlayerSource.fromUrl(widget.lesson.videoUrl);
     }
     final token = await widget.auth.validAccessToken();
-    return widget.api.fetchBunnyPlayerSource(
-      lessonId: widget.lesson.id,
-      accessToken: token ?? '',
-    );
+    if (token == null || token.isEmpty) {
+      throw Exception('Please sign in again to watch videos.');
+    }
+    try {
+      return await widget.api.fetchBunnyPlayerSource(
+        lessonId: widget.lesson.id,
+        accessToken: token,
+      );
+    } on AuthExpiredException {
+      final refreshedToken = await widget.auth.validAccessToken(
+        forceRefresh: true,
+      );
+      if (refreshedToken == null || refreshedToken.isEmpty) {
+        throw Exception('Your session expired. Please sign in again.');
+      }
+      return widget.api.fetchBunnyPlayerSource(
+        lessonId: widget.lesson.id,
+        accessToken: refreshedToken,
+      );
+    }
   }
 
   void _handleVideoProgress(
@@ -1013,6 +1055,128 @@ class _LearningVideoPanelState extends State<_LearningVideoPanel> {
       _creatingWatchSession = false;
       _markingComplete = false;
     }
+  }
+}
+
+class LessonVideoPlayer extends StatelessWidget {
+  const LessonVideoPlayer({
+    required this.source,
+    required this.onProgress,
+    super.key,
+  });
+
+  final VideoPlayerSource source;
+  final void Function(Duration position, Duration duration, bool completed)
+  onProgress;
+
+  @override
+  Widget build(BuildContext context) {
+    if (source.kind == VideoPlayerSourceKind.embedded) {
+      return EmbeddedBunnyPlayer(source: source);
+    }
+    return NativeVideoPlayer(source: source, onProgress: onProgress);
+  }
+}
+
+class EmbeddedBunnyPlayer extends StatefulWidget {
+  const EmbeddedBunnyPlayer({required this.source, super.key});
+
+  final VideoPlayerSource source;
+
+  @override
+  State<EmbeddedBunnyPlayer> createState() => _EmbeddedBunnyPlayerState();
+}
+
+class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
+  late final WebViewController _controller;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = _buildController(widget.source.uri);
+  }
+
+  @override
+  void didUpdateWidget(covariant EmbeddedBunnyPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.source.uri != widget.source.uri) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+      unawaited(_controller.loadRequest(widget.source.uri));
+    }
+  }
+
+  WebViewController _buildController(Uri uri) {
+    return WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.black)
+      ..setUserAgent(
+        'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/125 Mobile Safari/537.36',
+      )
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (_) {
+            if (mounted) {
+              setState(() {
+                _loading = true;
+                _error = null;
+              });
+            }
+          },
+          onPageFinished: (_) {
+            if (mounted) setState(() => _loading = false);
+          },
+          onWebResourceError: (error) {
+            if (error.isForMainFrame == true && mounted) {
+              setState(() {
+                _loading = false;
+                _error = error.description;
+              });
+            }
+          },
+        ),
+      )
+      ..loadRequest(uri);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final error = _error;
+    if (error != null) {
+      return ColoredBox(
+        color: Colors.black,
+        child: _PlayerMessage(
+          icon: Icons.error_outline_rounded,
+          title: 'Playback failed',
+          message: error,
+        ),
+      );
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(
+          color: Colors.black,
+          child: WebViewWidget(controller: _controller),
+        ),
+        if (_loading)
+          const ColoredBox(
+            color: Colors.black,
+            child: _PlayerMessage(
+              icon: Icons.play_circle_fill_rounded,
+              title: 'Loading video',
+              message: 'Opening Bunny video player...',
+              showProgress: true,
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -1116,6 +1280,19 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
           );
         }
 
+        if (snapshot.hasError) {
+          return ColoredBox(
+            color: Colors.black,
+            child: _PlayerMessage(
+              icon: Icons.error_outline_rounded,
+              title: 'Playback failed',
+              message:
+                  snapshot.error?.toString().replaceFirst('Exception: ', '') ??
+                  'The video stream could not be played on this device.',
+            ),
+          );
+        }
+
         if (value.hasError) {
           return ColoredBox(
             color: Colors.black,
@@ -1215,14 +1392,34 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
   }
 }
 
-class VideoPlayerSource {
-  const VideoPlayerSource(this.uri);
+enum VideoPlayerSourceKind { nativeStream, embedded }
 
-  factory VideoPlayerSource.fromUrl(String value) {
-    return VideoPlayerSource(Uri.parse(value));
+class VideoPlayerSource {
+  const VideoPlayerSource(this.uri, {required this.kind});
+
+  factory VideoPlayerSource.fromUrl(
+    String value, {
+    VideoPlayerSourceKind? kind,
+  }) {
+    final uri = Uri.parse(value);
+    return VideoPlayerSource(uri, kind: kind ?? _inferVideoSourceKind(uri));
   }
 
   final Uri uri;
+  final VideoPlayerSourceKind kind;
+}
+
+VideoPlayerSourceKind _inferVideoSourceKind(Uri uri) {
+  final value = uri.toString().toLowerCase();
+  final path = uri.path.toLowerCase();
+  if (path.endsWith('.m3u8') ||
+      path.endsWith('.mp4') ||
+      path.endsWith('.mov') ||
+      value.contains('playlist.m3u8') ||
+      value.contains('manifest/video.m3u8')) {
+    return VideoPlayerSourceKind.nativeStream;
+  }
+  return VideoPlayerSourceKind.embedded;
 }
 
 String _formatDuration(Duration duration) {
@@ -2280,6 +2477,15 @@ class _AccountTabState extends State<AccountTab> {
   }
 }
 
+class AuthExpiredException implements Exception {
+  const AuthExpiredException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class AcademyApi {
   AcademyApi(this._client);
 
@@ -2437,7 +2643,9 @@ class AcademyApi {
     );
 
     if (response.statusCode == 401) {
-      throw Exception('Your session expired. Please sign in again.');
+      throw const AuthExpiredException(
+        'Your session expired. Please sign in again.',
+      );
     }
     if (response.statusCode == 403) {
       throw Exception('Please enroll in this course to watch the lesson.');
@@ -2452,18 +2660,40 @@ class AcademyApi {
     }
 
     final body = _decodeObject(response);
-    final playerUrl = _findStringByKeys(body, const [
+    final nativeUrl = _findStringByKeys(body, const [
       'hlsUrl',
+      'hls_url',
+      'streamUrl',
+      'stream_url',
+      'mp4Url',
+      'mp4_url',
+      'videoUrl',
+      'video_url',
       'playbackUrl',
+      'playback_url',
+    ]);
+    if (nativeUrl != null && nativeUrl.isNotEmpty) {
+      return VideoPlayerSource.fromUrl(
+        nativeUrl,
+        kind: _inferVideoSourceKind(Uri.parse(nativeUrl)),
+      );
+    }
+
+    final embedUrl = _findStringByKeys(body, const [
       'embedUrl',
+      'embed_url',
       'playerUrl',
+      'player_url',
       'url',
     ]);
-    if (playerUrl == null || playerUrl.isEmpty) {
+    if (embedUrl == null || embedUrl.isEmpty) {
       throw Exception('Video player URL was not returned by the server.');
     }
 
-    return VideoPlayerSource.fromUrl(playerUrl);
+    return VideoPlayerSource.fromUrl(
+      embedUrl,
+      kind: VideoPlayerSourceKind.embedded,
+    );
   }
 
   Future<String?> createWatchSession({
@@ -2827,18 +3057,25 @@ class AuthController extends ChangeNotifier {
     }
   }
 
-  Future<String?> validAccessToken() async {
+  Future<String?> validAccessToken({bool forceRefresh = false}) async {
     final current = session;
     if (current == null || current.accessToken.isEmpty) return null;
-    if (current.shouldRefresh) {
-      await refresh();
+    if (forceRefresh || current.shouldRefresh) {
+      try {
+        await refresh();
+      } catch (_) {
+        await signOut();
+        return null;
+      }
     }
     return session?.accessToken;
   }
 
   Future<void> refresh() async {
     final current = session;
-    if (current == null || current.refreshToken.isEmpty) return;
+    if (current == null || current.refreshToken.isEmpty) {
+      throw Exception('Session expired.');
+    }
     final next = await _api.refreshSession(refreshToken: current.refreshToken);
     if (next == null) throw Exception('Session refresh failed.');
     session = next;
@@ -2903,8 +3140,11 @@ class AuthSession {
   final String userId;
   final DateTime? expiresAt;
 
+  DateTime? get effectiveExpiresAt =>
+      expiresAt ?? _jwtExpiryFromToken(accessToken);
+
   bool get shouldRefresh {
-    final expiry = expiresAt;
+    final expiry = effectiveExpiresAt;
     if (expiry == null) return false;
     return DateTime.now().isAfter(expiry.subtract(const Duration(minutes: 5)));
   }
@@ -2970,6 +3210,26 @@ DateTime? _authExpiryFromJson(Map<String, dynamic> json) {
     return DateTime.now().add(Duration(seconds: expiresIn.round()));
   }
   return null;
+}
+
+DateTime? _jwtExpiryFromToken(String token) {
+  final parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    final payload = utf8.decode(
+      base64Url.decode(base64Url.normalize(parts[1])),
+    );
+    final decoded = jsonDecode(payload);
+    if (decoded is! Map<String, dynamic>) return null;
+    final exp = decoded['exp'];
+    if (exp is! num || exp <= 0) return null;
+    return DateTime.fromMillisecondsSinceEpoch(
+      exp.round() * 1000,
+      isUtc: false,
+    );
+  } catch (_) {
+    return null;
+  }
 }
 
 class HomeData {
