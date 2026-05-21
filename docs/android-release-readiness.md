@@ -11,9 +11,9 @@ Release APK and AAB builds complete successfully. The release APK was installed 
 ## Major Changes
 
 - Replaced the old separate/blank video page with `CourseLearningScreen`: video stays at the top, and lesson summary, resources, quiz, and curriculum stay below it.
-- Signed Bunny playback now uses `webview_flutter` with the official Bunny embed player inside the native lesson screen.
-- Bunny playback calls `POST https://merolaganiacademy.com/api/public/bunny/sign-playback`, prefers embed/player URLs, and only falls back to direct HLS/MP4 URLs when no embed URL is returned.
-- Added a WebView JavaScript bridge so embedded Bunny playback still reports watch progress back to Flutter.
+- Signed Bunny playback calls `POST https://merolaganiacademy.com/api/public/bunny/sign-playback`, loads the signed embed response, extracts the tokenized MP4/HLS media URL, and plays it through Flutter `video_player` with the required `Referer` header.
+- The Bunny WebView player remains only as a fallback when a direct signed media URL cannot be extracted.
+- Added Previous/Next controls and lesson-switch scroll reset so selecting another lesson immediately returns the learner to the player, summary, and quiz.
 - Added protected-video states: signed-out learners see a clear sign-in prompt; expired sessions are refreshed/retried before showing an auth failure.
 - Fixed the signed-out course detail action so `Sign in to start` opens the Account tab instead of dropping users into a failed lesson screen.
 - Added video progress tracking through `video_watch_sessions` create/update calls.
@@ -47,9 +47,9 @@ Emulator QA:
 - Opened `Credit Course` course detail.
 - Verified signed-out `Sign in to start` routes to Account instead of opening the lesson screen.
 - Signed in with a learner account and reproduced the earlier native HLS failure: the signed endpoint returned both `embedUrl` and `hlsUrl`, but Android ExoPlayer received HTTP 403 from the HLS URL.
-- Updated playback selection to prefer Bunny `embedUrl` and rebuilt for emulator validation.
-- Installed the final release APK, opened `Credit Course`, loaded the Bunny player, tapped play, and verified the frame advanced during playback.
-- Verified the embedded player progress bridge wrote a fresh `video_watch_sessions` heartbeat from the Android app.
+- Updated playback selection to extract the tokenized media URL from the signed Bunny embed HTML and use native `video_player` with the required `Referer` header.
+- Installed the final release APK, opened `Credit Course`, loaded native video playback, tapped play, and verified the frame advanced during playback.
+- Verified `Next` switches to lesson 2, returns to the player/quiz area, and loads the next lesson's quiz.
 - Verified the app launches after adding `webview_flutter`.
 - Checked logcat after navigation for Flutter render overflow, Android fatal exception, and ANR patterns.
 
@@ -67,10 +67,13 @@ Latest screenshots:
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/login-test/22-final-player-loaded.png`
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/login-test/23-final-after-play-5s.png`
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/login-test/24-final-after-play-13s.png`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/native-learning-flow/03-native-after-wait.png`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/native-learning-flow/04-native-after-play.png`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/native-learning-flow/06-native-next-ready-after-wait.png`
 
 ## Important Remaining Blockers
 
-No release-blocking playback issue is currently open after the Bunny embed preference change. Final Play Store upload still needs a production signing keystore instead of the local debug signing fallback.
+No release-blocking playback issue is currently open after the native signed-media extraction change. Final Play Store upload still needs a production signing keystore instead of the local debug signing fallback.
 
 ## Build Notes
 

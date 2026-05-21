@@ -719,6 +719,7 @@ class CourseLearningScreen extends StatefulWidget {
 }
 
 class _CourseLearningScreenState extends State<CourseLearningScreen> {
+  final _contentController = ScrollController();
   late Lesson _selectedLesson;
 
   @override
@@ -727,6 +728,44 @@ class _CourseLearningScreenState extends State<CourseLearningScreen> {
     _selectedLesson =
         widget.detail.lessonById(widget.initialLessonId) ??
         widget.detail.firstLesson;
+  }
+
+  @override
+  void dispose() {
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  List<Lesson> get _lessons => widget.detail.lessons;
+
+  int get _selectedLessonIndex {
+    final index = _lessons.indexWhere(
+      (lesson) => lesson.id == _selectedLesson.id,
+    );
+    return index < 0 ? 0 : index;
+  }
+
+  void _selectLesson(Lesson lesson) {
+    setState(() => _selectedLesson = lesson);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_contentController.hasClients) return;
+      _contentController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _selectRelativeLesson(int offset) {
+    final lessons = _lessons;
+    if (lessons.isEmpty) return;
+    final nextIndex = (_selectedLessonIndex + offset).clamp(
+      0,
+      lessons.length - 1,
+    );
+    if (nextIndex == _selectedLessonIndex) return;
+    _selectLesson(lessons[nextIndex]);
   }
 
   @override
@@ -761,11 +800,19 @@ class _CourseLearningScreenState extends State<CourseLearningScreen> {
                 ),
                 Expanded(
                   child: ListView(
+                    controller: _contentController,
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                     children: [
                       _SelectedLessonSummary(lesson: _selectedLesson),
-                      _LessonResourcesPanel(
-                        resources: _selectedLesson.resources,
+                      _LessonNavigationControls(
+                        currentIndex: _selectedLessonIndex,
+                        lessonCount: _lessons.length,
+                        onPrevious: _selectedLessonIndex > 0
+                            ? () => _selectRelativeLesson(-1)
+                            : null,
+                        onNext: _selectedLessonIndex < _lessons.length - 1
+                            ? () => _selectRelativeLesson(1)
+                            : null,
                       ),
                       _LessonQuizPanel(
                         key: ValueKey('quiz-${_selectedLesson.id}'),
@@ -773,14 +820,15 @@ class _CourseLearningScreenState extends State<CourseLearningScreen> {
                         auth: widget.auth,
                         lesson: _selectedLesson,
                       ),
+                      _LessonResourcesPanel(
+                        resources: _selectedLesson.resources,
+                      ),
                       const _DetailHeading('Course content'),
                       ...widget.detail.sections.map(
                         (section) => _LearningSectionCard(
                           section: section,
                           selectedLessonId: _selectedLesson.id,
-                          onLessonTap: (lesson) {
-                            setState(() => _selectedLesson = lesson);
-                          },
+                          onLessonTap: _selectLesson,
                         ),
                       ),
                     ],
@@ -896,8 +944,8 @@ class _LearningVideoPanelState extends State<_LearningVideoPanel> {
         color: Colors.black,
         child: _PlayerMessage(
           icon: Icons.play_circle_fill_rounded,
-          title: 'Loading video',
-          message: 'Preparing your lesson video...',
+          title: 'Preparing video',
+          message: 'Securing your lesson and getting playback ready.',
           showProgress: true,
         ),
       );
@@ -911,8 +959,8 @@ class _LearningVideoPanelState extends State<_LearningVideoPanel> {
             color: Colors.black,
             child: _PlayerMessage(
               icon: Icons.play_circle_fill_rounded,
-              title: 'Loading video',
-              message: 'Preparing your lesson video...',
+              title: 'Preparing video',
+              message: 'Securing your lesson and getting playback ready.',
               showProgress: true,
             ),
           );
@@ -1095,6 +1143,7 @@ class EmbeddedBunnyPlayer extends StatefulWidget {
 
 class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
   late final WebViewController _controller;
+  Timer? _loadingFallbackTimer;
   bool _loading = true;
   String? _error;
 
@@ -1112,8 +1161,15 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
         _loading = true;
         _error = null;
       });
+      _startLoadingFallbackTimer();
       unawaited(_controller.loadRequest(widget.source.uri));
     }
+  }
+
+  @override
+  void dispose() {
+    _loadingFallbackTimer?.cancel();
+    super.dispose();
   }
 
   WebViewController _buildController(Uri uri) {
@@ -1123,6 +1179,10 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
       ..addJavaScriptChannel(
         'LessonVideoProgress',
         onMessageReceived: _handleProgressMessage,
+      )
+      ..addJavaScriptChannel(
+        'LessonVideoReady',
+        onMessageReceived: (_) => _markVideoReady(),
       )
       ..setUserAgent(
         'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
@@ -1136,11 +1196,11 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
                 _loading = true;
                 _error = null;
               });
+              _startLoadingFallbackTimer();
             }
           },
           onPageFinished: (_) {
             _installProgressBridge();
-            if (mounted) setState(() => _loading = false);
           },
           onWebResourceError: (error) {
             if (error.isForMainFrame == true && mounted) {
@@ -1162,17 +1222,37 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
         (function () {
           if (window.__merolaganiProgressBridgeInstalled) return;
           window.__merolaganiProgressBridgeInstalled = true;
+          function reportReady(video) {
+            if (video && isFinite(video.duration) && video.duration > 0) {
+              LessonVideoReady.postMessage('ready');
+            }
+          }
           function reportProgress() {
             var video = document.querySelector('video');
             if (!video || !isFinite(video.duration) || video.duration <= 0) {
               return;
             }
+            reportReady(video);
             LessonVideoProgress.postMessage(JSON.stringify({
               position: video.currentTime || 0,
               duration: video.duration || 0,
               completed: !!video.ended
             }));
           }
+          var attempts = 0;
+          var finder = setInterval(function () {
+            var video = document.querySelector('video');
+            attempts += 1;
+            if (!video && attempts > 40) {
+              clearInterval(finder);
+              return;
+            }
+            if (!video) return;
+            reportReady(video);
+            video.addEventListener('loadedmetadata', function () { reportReady(video); });
+            video.addEventListener('canplay', function () { reportReady(video); });
+            clearInterval(finder);
+          }, 250);
           setInterval(reportProgress, 1000);
           document.addEventListener('play', reportProgress, true);
           document.addEventListener('pause', reportProgress, true);
@@ -1181,6 +1261,17 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
       ''')
           .catchError((_) {}),
     );
+  }
+
+  void _startLoadingFallbackTimer() {
+    _loadingFallbackTimer?.cancel();
+    _loadingFallbackTimer = Timer(const Duration(seconds: 10), _markVideoReady);
+  }
+
+  void _markVideoReady() {
+    _loadingFallbackTimer?.cancel();
+    if (!mounted || !_loading) return;
+    setState(() => _loading = false);
   }
 
   void _handleProgressMessage(JavaScriptMessage message) {
@@ -1231,8 +1322,8 @@ class _EmbeddedBunnyPlayerState extends State<EmbeddedBunnyPlayer> {
             color: Colors.black,
             child: _PlayerMessage(
               icon: Icons.play_circle_fill_rounded,
-              title: 'Loading video',
-              message: 'Opening Bunny video player...',
+              title: 'Preparing video',
+              message: 'Securing your lesson and getting playback ready.',
               showProgress: true,
             ),
           ),
@@ -1287,6 +1378,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
   void _initialize() {
     final controller = VideoPlayerController.networkUrl(
       widget.source.uri,
+      httpHeaders: widget.source.httpHeaders,
       videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false),
     )..addListener(_onControllerTick);
     _controller = controller;
@@ -1334,8 +1426,8 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
             color: Colors.black,
             child: _PlayerMessage(
               icon: Icons.play_circle_fill_rounded,
-              title: 'Loading video',
-              message: 'Preparing native video playback...',
+              title: 'Preparing video',
+              message: 'Getting playback ready...',
               showProgress: true,
             ),
           );
@@ -1456,18 +1548,28 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
 enum VideoPlayerSourceKind { nativeStream, embedded }
 
 class VideoPlayerSource {
-  const VideoPlayerSource(this.uri, {required this.kind});
+  const VideoPlayerSource(
+    this.uri, {
+    required this.kind,
+    this.httpHeaders = const {},
+  });
 
   factory VideoPlayerSource.fromUrl(
     String value, {
     VideoPlayerSourceKind? kind,
+    Map<String, String> httpHeaders = const {},
   }) {
     final uri = Uri.parse(value);
-    return VideoPlayerSource(uri, kind: kind ?? _inferVideoSourceKind(uri));
+    return VideoPlayerSource(
+      uri,
+      kind: kind ?? _inferVideoSourceKind(uri),
+      httpHeaders: httpHeaders,
+    );
   }
 
   final Uri uri;
   final VideoPlayerSourceKind kind;
+  final Map<String, String> httpHeaders;
 }
 
 VideoPlayerSourceKind _inferVideoSourceKind(Uri uri) {
@@ -1481,6 +1583,36 @@ VideoPlayerSourceKind _inferVideoSourceKind(Uri uri) {
     return VideoPlayerSourceKind.nativeStream;
   }
   return VideoPlayerSourceKind.embedded;
+}
+
+String? _extractBunnyMediaUrl(String html) {
+  final urls = RegExp(r'''https?:\\?/\\?/[^"'<>\s\\]+''')
+      .allMatches(html)
+      .map((match) => match.group(0) ?? '')
+      .where((value) => value.isNotEmpty)
+      .map(
+        (value) => value
+            .replaceAll(r'\/', '/')
+            .replaceAll('&amp;', '&')
+            .replaceAll('\\u0026', '&'),
+      )
+      .where((value) => RegExp(r'\.(mp4|m3u8)(?:[/?#]|$)').hasMatch(value))
+      .toSet()
+      .toList();
+  if (urls.isEmpty) return null;
+
+  final mp4Urls = urls.where((url) => url.contains('.mp4')).toList()
+    ..sort((a, b) => _bunnyVideoHeight(b).compareTo(_bunnyVideoHeight(a)));
+  if (mp4Urls.isNotEmpty) return mp4Urls.first;
+
+  final hlsUrls = urls.where((url) => url.contains('.m3u8')).toList();
+  if (hlsUrls.isNotEmpty) return hlsUrls.first;
+  return null;
+}
+
+int _bunnyVideoHeight(String url) {
+  final match = RegExp(r'play_(\d+)p\.mp4').firstMatch(url);
+  return int.tryParse(match?.group(1) ?? '') ?? 0;
 }
 
 String _formatDuration(Duration duration) {
@@ -1559,6 +1691,56 @@ class _SelectedLessonSummary extends StatelessWidget {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LessonNavigationControls extends StatelessWidget {
+  const _LessonNavigationControls({
+    required this.currentIndex,
+    required this.lessonCount,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int currentIndex;
+  final int lessonCount;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    if (lessonCount <= 1) return const SizedBox(height: 12);
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: onPrevious,
+              icon: const Icon(Icons.skip_previous_rounded),
+              label: const Text('Previous'),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              '${currentIndex + 1}/$lessonCount',
+              style: const TextStyle(
+                color: _mutedInk,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: onNext,
+              icon: const Icon(Icons.skip_next_rounded),
+              label: const Text('Next'),
+            ),
+          ),
         ],
       ),
     );
@@ -2729,6 +2911,8 @@ class AcademyApi {
       'url',
     ]);
     if (embedUrl != null && embedUrl.isNotEmpty) {
+      final nativeFromEmbed = await _nativeSourceFromBunnyEmbed(embedUrl);
+      if (nativeFromEmbed != null) return nativeFromEmbed;
       return VideoPlayerSource.fromUrl(
         embedUrl,
         kind: VideoPlayerSourceKind.embedded,
@@ -2755,6 +2939,34 @@ class AcademyApi {
     }
 
     throw Exception('Video player URL was not returned by the server.');
+  }
+
+  Future<VideoPlayerSource?> _nativeSourceFromBunnyEmbed(
+    String embedUrl,
+  ) async {
+    try {
+      final response = await _client.get(
+        Uri.parse(embedUrl),
+        headers: const {'Accept': 'text/html,application/xhtml+xml'},
+      );
+      if (response.statusCode >= 400) return null;
+
+      final sourceUrl = _extractBunnyMediaUrl(response.body);
+      if (sourceUrl == null || sourceUrl.isEmpty) return null;
+      final uri = Uri.parse(sourceUrl);
+      return VideoPlayerSource.fromUrl(
+        sourceUrl,
+        kind: _inferVideoSourceKind(uri),
+        httpHeaders: {
+          'Referer': embedUrl,
+          'User-Agent':
+              'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/125 Mobile Safari/537.36',
+        },
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<String?> createWatchSession({
@@ -3429,6 +3641,11 @@ class CourseDetail {
   List<String> get lessonIds => [
     for (final section in sections)
       for (final lesson in section.lessons) lesson.id,
+  ];
+
+  List<Lesson> get lessons => [
+    for (final section in sections)
+      for (final lesson in section.lessons) lesson,
   ];
 
   Lesson get firstLesson {
