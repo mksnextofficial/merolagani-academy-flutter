@@ -13,6 +13,9 @@ const _supabaseUrl = 'https://cgnpscogzqvrvaopwhhm.supabase.co';
 const _anonKey =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNnbnBzY29nenF2cnZhb3B3aGhtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNDMzMjQsImV4cCI6MjA5MzYxOTMyNH0.sGHksNYA1A_4Dn9anzNK7NKKqp6SzeQEMk91R0lOkCs';
 final _siteUri = Uri.parse('https://merolaganiacademy.com/');
+const _androidPlayerChannel = MethodChannel(
+  'com.meroverse.merolagani_academy/player',
+);
 
 const _brandTeal = Color(0xFF3F9EA4);
 const _brandTealDark = Color(0xFF256D73);
@@ -1412,6 +1415,39 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _enterFullscreen() async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _NativeVideoFullscreen(
+          controller: controller,
+          onEnterPip: _enterPictureInPicture,
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _enterPictureInPicture() async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    try {
+      await _androidPlayerChannel.invokeMethod<bool>('enterPiP', {
+        'aspectRatio': controller.value.aspectRatio == 0
+            ? 16 / 9
+            : controller.value.aspectRatio,
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Picture-in-picture is not available on this device.'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
@@ -1502,6 +1538,26 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
                         ),
                       ),
                       Positioned(
+                        top: 10,
+                        right: 10,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _PlayerIconButton(
+                              tooltip: 'Picture in picture',
+                              icon: Icons.picture_in_picture_alt_rounded,
+                              onPressed: _enterPictureInPicture,
+                            ),
+                            const SizedBox(width: 8),
+                            _PlayerIconButton(
+                              tooltip: 'Fullscreen',
+                              icon: Icons.fullscreen_rounded,
+                              onPressed: _enterFullscreen,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Positioned(
                         left: 12,
                         right: 12,
                         bottom: 10,
@@ -1541,6 +1597,182 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer> {
           ),
         );
       },
+    );
+  }
+}
+
+class _NativeVideoFullscreen extends StatefulWidget {
+  const _NativeVideoFullscreen({
+    required this.controller,
+    required this.onEnterPip,
+  });
+
+  final VideoPlayerController controller;
+  final Future<void> Function() onEnterPip;
+
+  @override
+  State<_NativeVideoFullscreen> createState() => _NativeVideoFullscreenState();
+}
+
+class _NativeVideoFullscreenState extends State<_NativeVideoFullscreen> {
+  bool _showControls = true;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_handleTick);
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky),
+    );
+    unawaited(
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]),
+    );
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleTick);
+    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+    unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
+    super.dispose();
+  }
+
+  void _handleTick() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = widget.controller.value;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onTap: () => setState(() => _showControls = !_showControls),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: AspectRatio(
+                aspectRatio: value.aspectRatio == 0
+                    ? 16 / 9
+                    : value.aspectRatio,
+                child: VideoPlayer(widget.controller),
+              ),
+            ),
+            if (_showControls)
+              ColoredBox(
+                color: Colors.black26,
+                child: Stack(
+                  children: [
+                    Positioned(
+                      top: 18,
+                      left: 18,
+                      child: _PlayerIconButton(
+                        tooltip: 'Exit fullscreen',
+                        icon: Icons.fullscreen_exit_rounded,
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ),
+                    Positioned(
+                      top: 18,
+                      right: 18,
+                      child: _PlayerIconButton(
+                        tooltip: 'Picture in picture',
+                        icon: Icons.picture_in_picture_alt_rounded,
+                        onPressed: widget.onEnterPip,
+                      ),
+                    ),
+                    Center(
+                      child: IconButton.filled(
+                        iconSize: 54,
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.black54,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            value.isPlaying
+                                ? widget.controller.pause()
+                                : widget.controller.play();
+                          });
+                        },
+                        icon: Icon(
+                          value.isPlaying
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 24,
+                      right: 24,
+                      bottom: 20,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          VideoProgressIndicator(
+                            widget.controller,
+                            allowScrubbing: true,
+                            colors: const VideoProgressColors(
+                              playedColor: _brandGold,
+                              bufferedColor: Colors.white38,
+                              backgroundColor: Colors.white24,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                _formatDuration(value.position),
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                              Text(
+                                _formatDuration(value.duration),
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayerIconButton extends StatelessWidget {
+  const _PlayerIconButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: IconButton.filled(
+        iconSize: 24,
+        style: IconButton.styleFrom(
+          backgroundColor: Colors.black54,
+          foregroundColor: Colors.white,
+        ),
+        onPressed: onPressed,
+        icon: Icon(icon),
+      ),
     );
   }
 }

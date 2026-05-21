@@ -13,6 +13,7 @@ Release APK and AAB builds complete successfully. The release APK was installed 
 - Replaced the old separate/blank video page with `CourseLearningScreen`: video stays at the top, and lesson summary, resources, quiz, and curriculum stay below it.
 - Signed Bunny playback calls `POST https://merolaganiacademy.com/api/public/bunny/sign-playback`, loads the signed embed response, extracts the tokenized MP4/HLS media URL, and plays it through Flutter `video_player` with the required `Referer` header.
 - The Bunny WebView player remains only as a fallback when a direct signed media URL cannot be extracted.
+- Added native fullscreen controls and Android picture-in-picture through a Flutter platform channel.
 - Added Previous/Next controls and lesson-switch scroll reset so selecting another lesson immediately returns the learner to the player, summary, and quiz.
 - Added protected-video states: signed-out learners see a clear sign-in prompt; expired sessions are refreshed/retried before showing an auth failure.
 - Fixed the signed-out course detail action so `Sign in to start` opens the Account tab instead of dropping users into a failed lesson screen.
@@ -50,6 +51,8 @@ Emulator QA:
 - Updated playback selection to extract the tokenized media URL from the signed Bunny embed HTML and use native `video_player` with the required `Referer` header.
 - Installed the final release APK, opened `Credit Course`, loaded native video playback, tapped play, and verified the frame advanced during playback.
 - Verified `Next` switches to lesson 2, returns to the player/quiz area, and loads the next lesson's quiz.
+- Verified fullscreen opens in landscape mode.
+- Verified Android PiP enters pinned mode from the video player.
 - Verified the app launches after adding `webview_flutter`.
 - Checked logcat after navigation for Flutter render overflow, Android fatal exception, and ANR patterns.
 
@@ -70,6 +73,9 @@ Latest screenshots:
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/native-learning-flow/03-native-after-wait.png`
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/native-learning-flow/04-native-after-play.png`
 - `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/native-learning-flow/06-native-next-ready-after-wait.png`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/player-controls/03-after-wait.png`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/player-controls/05-fullscreen-dismissed.png`
+- `/Users/manish/Documents/Codex Project 1/outputs/merolagani-academy-apk/screenshots/player-controls/06-after-pip-tap.png`
 
 ## Important Remaining Blockers
 
@@ -83,6 +89,7 @@ No release-blocking playback issue is currently open after the native signed-med
 - Target SDK: `36`
 - Cleartext traffic: disabled
 - Android backup: disabled
+- Android PiP: enabled on `MainActivity`
 - Release builds use the debug signing config if `android/key.properties` is absent. Add a production keystore before Play Store upload.
 
 Flutter currently warns that `shared_preferences_android`, `video_player_android`, and `webview_flutter_android` apply the Kotlin Gradle Plugin. This is a future Flutter compatibility warning, not a current build failure.
